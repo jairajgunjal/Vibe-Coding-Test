@@ -13,8 +13,6 @@
 // Returns a cleanup function that detaches the hover listeners.
 
 export function renderReport(root, range) {
-  "use strict";
-
   function cssv(name) { return getComputedStyle(root).getPropertyValue(name).trim(); }
   function pad(n) { return n.toString().padStart(2, "0"); }
 

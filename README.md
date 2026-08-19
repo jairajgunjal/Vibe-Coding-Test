@@ -1,48 +1,47 @@
 # Energy Consumption Report
 
 Real-time snapshot report for **Voltage, Current, Power Factor, and Max Demand**,
-built as a **React + Vite** static application.
+built as a **React** application (Create React App / `react-scripts`).
 
 The UI, calculations, gauges, sparklines, recent-history trend (with hover
-tooltip), and data table are the original report, unchanged — only the project
-has been restructured into a buildable React + Vite app.
+tooltip), data table, and the date/time range picker are unchanged — only the
+toolchain is plain React (no Vite).
 
 ## Develop
 
 ```bash
-npm install --force
-npm run dev        # http://localhost:5173
+npm install
+npm start          # http://localhost:3000
 ```
 
 ## Build
 
 ```bash
-npm run build      # outputs static files to dist/
-npm run preview    # serve the production build locally
+npm run build      # outputs static files to build/
+npx serve -s build # serve the production build locally
 ```
 
-## Deploy — AI Studio Manager (Vite framework)
+## Deploy — AI Studio Manager (CRA framework)
 
-| Setting          | Value             |
-| ---------------- | ----------------- |
-| Framework        | `vite`            |
+| Setting          | Value                 |
+| ---------------- | --------------------- |
+| Framework        | `cra`                 |
 | Install command  | `npm install --force` |
-| Build command    | `npm run build`   |
-| Output directory | `dist`            |
-| Start command    | `npm run preview` |
-| SSR              | off (static)      |
+| Build command    | `npm run build`       |
+| Output directory | `build`               |
+| Start command    | `serve -s build`      |
+| SSR              | off (static)          |
 
-`vite.config.js` sets `base: './'` so the static build works whether it is served
-from a domain root or a sub-path.
+`"homepage": "."` in `package.json` makes the build use relative asset paths, so
+it works whether served from a domain root or a sub-path.
 
 ## Structure
 
 ```
-index.html          Vite entry (mounts #root)
-vite.config.js      base './', outDir dist
+public/index.html   HTML template (mounts #root)
 src/
-  main.jsx          React entry
-  App.jsx           static shell that mirrors the original markup
+  index.js          React entry
+  App.js            static shell that mirrors the original markup + range picker
   report.js         data + gauge/sparkline/trend/table rendering (ported verbatim)
   index.css         styles (ported verbatim, theme-aware light/dark)
 ```
@@ -50,4 +49,4 @@ src/
 ## Wiring real data
 
 The values are simulated in `src/report.js`. To go live, replace the `series(...)`
-generators and the demo device/sensor IDs in `src/App.jsx` with real readings.
+generators and the demo device/sensor IDs in `src/App.js` with real readings.
