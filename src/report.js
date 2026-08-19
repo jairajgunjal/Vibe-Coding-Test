@@ -1,30 +1,48 @@
 // Energy consumption report rendering logic.
 //
-// This is the exact computation + rendering from the original standalone HTML
-// report, parameterized to run against a provided root element (the React-mounted
-// `.app` node) instead of `document`. Behavior, data, gauges, sparklines, the
-// trend chart, hover tooltip, and table are preserved unchanged.
+// Ported from the original standalone HTML report and parameterized to run
+// against a provided root element (the React-mounted `.app` node) and a `range`
+// descriptor from the date/time picker:
+//
+//   range = { samples, stepMs, endMs, sub }
+//
+// Behavior, data model, gauges, sparklines, the trend chart, hover tooltip, and
+// table are preserved; only the time window (sample count, spacing, end time and
+// the axis/table time formatting) now follows the selected range.
 //
 // Returns a cleanup function that detaches the hover listeners.
 
-export function renderReport(root) {
+export function renderReport(root, range) {
   "use strict";
 
   function cssv(name) { return getComputedStyle(root).getPropertyValue(name).trim(); }
+  function pad(n) { return n.toString().padStart(2, "0"); }
 
-  // ---- Simulated real-time data ---------------------------------------------
-  var N = 30;                       // samples (minutes)
+  // ---- Time window (driven by the picker) -----------------------------------
+  var N = range.samples;
+  var stepMs = range.stepMs;
+  var endMs = range.endMs;
+  var spanMs = stepMs * (N - 1);
   var now = new Date();
-  var times = [];
-  for (var i = N - 1; i >= 0; i--) times.push(new Date(now.getTime() - i * 60000));
 
-  // deterministic-ish wandering series so the report is stable per load
+  var times = [];
+  for (var i = 0; i < N; i++) times.push(new Date(endMs - (N - 1 - i) * stepMs));
+
+  // Show date components only when the window is longer than a day.
+  function fmtT(t) {
+    var hm = pad(t.getHours()) + ":" + pad(t.getMinutes());
+    if (spanMs > 3 * 86400000) return pad(t.getDate()) + "/" + pad(t.getMonth() + 1);
+    if (spanMs > 86400000) return pad(t.getDate()) + "/" + pad(t.getMonth() + 1) + " " + hm;
+    return hm;
+  }
+
+  // deterministic-ish wandering series so the report is stable per render
   function series(base, amp, noise, seed) {
     var out = [], v = base, s = seed;
-    for (var i = 0; i < N; i++) {
+    for (var k = 0; k < N; k++) {
       s = (s * 9301 + 49297) % 233280;
       var r = s / 233280;
-      var wobble = Math.sin(i / 4 + seed) * amp;
+      var wobble = Math.sin(k / 4 + seed) * amp;
       v = base + wobble + (r - 0.5) * noise;
       out.push(v);
     }
@@ -99,7 +117,7 @@ export function renderReport(root) {
   function sparkline(data, colorVar, w, h) {
     w = w || 190; h = h || 40;
     var min = Math.min.apply(null, data), max = Math.max.apply(null, data);
-    var pad = (max - min) * 0.15 || 1; min -= pad; max += pad;
+    var pad2 = (max - min) * 0.15 || 1; min -= pad2; max += pad2;
     var col = cssv(colorVar);
     var pts = data.map(function (v, i) {
       var x = (i / (data.length - 1)) * (w - 6) + 3;
@@ -118,6 +136,10 @@ export function renderReport(root) {
     return svg;
   }
 
+  // ---- Range subtitle --------------------------------------------------------
+  var subEl = root.querySelector("#rangesub");
+  if (subEl) subEl.textContent = range.sub + " · each series indexed to its own scale";
+
   // ---- Render cards ----------------------------------------------------------
   var cardsEl = root.querySelector("#cards");
   cardsEl.innerHTML = "";
@@ -133,7 +155,7 @@ export function renderReport(root) {
         '<div class="readout"><div><span class="val">' + p.fmt(p.val) + '</span>' +
         (p.unit ? '<span class="unit">' + p.unit + '</span>' : '') + '</div>' +
         '<div class="rng">' + p.range + '</div></div></div>' +
-      '<div class="spark"><div class="lbl"><span>Last 30 min</span><span>min ' +
+      '<div class="spark"><div class="lbl"><span>' + range.spanLabel + '</span><span>min ' +
         p.fmt(Math.min.apply(null, p.data)) + ' &middot; max ' + p.fmt(Math.max.apply(null, p.data)) + '</span></div>' +
         sparkline(p.data, p.series) + '</div>';
     cardsEl.appendChild(el);
@@ -158,17 +180,21 @@ export function renderReport(root) {
   function tx(i) { return ML + (i / (N - 1)) * plotW; }
   function ty(f) { return MT + (1 - f) * plotH; }
 
+  // Four evenly-spaced x ticks, regardless of sample count.
+  var ticks = [0, Math.round((N - 1) / 3), Math.round(2 * (N - 1) / 3), N - 1]
+    .filter(function (v, i, a) { return a.indexOf(v) === i; });
+
   var chart = '<svg id="tsvg" width="100%" viewBox="0 0 ' + TW + ' ' + TH + '" style="display:block">';
   // gridlines
   for (var g = 0; g <= 4; g++) {
     var gy = MT + (g / 4) * plotH;
     chart += '<line x1="' + ML + '" y1="' + gy + '" x2="' + (TW - MR) + '" y2="' + gy + '" stroke="' + cssv("--grid") + '" stroke-width="1"/>';
   }
-  // x labels (every ~10 min)
-  [0, 10, 20, 29].forEach(function (i) {
+  // x labels
+  ticks.forEach(function (i) {
     var t = times[i];
-    var lbl = t.getHours().toString().padStart(2, "0") + ":" + t.getMinutes().toString().padStart(2, "0");
-    chart += '<text x="' + tx(i).toFixed(1) + '" y="' + (TH - 8) + '" fill="' + cssv("--muted") + '" font-size="12" text-anchor="' + (i === 0 ? "start" : i === 29 ? "end" : "middle") + '">' + lbl + '</text>';
+    var anchor = i === 0 ? "start" : (i === N - 1 ? "end" : "middle");
+    chart += '<text x="' + tx(i).toFixed(1) + '" y="' + (TH - 8) + '" fill="' + cssv("--muted") + '" font-size="12" text-anchor="' + anchor + '">' + fmtT(t) + '</text>';
   });
   params.forEach(function (p) {
     var norm = normalize(p.data);
@@ -196,7 +222,7 @@ export function renderReport(root) {
       return '<div class="tt-r"><span class="k" style="background:' + cssv(p.series) + '"></span>' +
         p.name + ': <b>' + p.fmt(p.data[idx]) + (p.unit ? ' ' + p.unit : '') + '</b></div>';
     }).join("");
-    tt.innerHTML = '<div class="tt-t">' + t.getHours().toString().padStart(2, "0") + ":" + t.getMinutes().toString().padStart(2, "0") + '</div>' + rows;
+    tt.innerHTML = '<div class="tt-t">' + fmtT(t) + '</div>' + rows;
     tt.style.opacity = "1";
     var tx2 = e.clientX + 14, ty2 = e.clientY + 14;
     if (tx2 + 180 > window.innerWidth) tx2 = e.clientX - 194;
@@ -210,9 +236,8 @@ export function renderReport(root) {
   var tb = root.querySelector("#tbl tbody");
   tb.innerHTML = "";
   for (var j = N - 1; j >= 0; j--) {
-    var trow = times[j];
     var tr = document.createElement("tr");
-    tr.innerHTML = "<td>" + trow.getHours().toString().padStart(2, "0") + ":" + trow.getMinutes().toString().padStart(2, "0") + "</td>" +
+    tr.innerHTML = "<td>" + fmtT(times[j]) + "</td>" +
       "<td>" + voltage[j].toFixed(1) + "</td><td>" + current[j].toFixed(1) + "</td>" +
       "<td>" + pf[j].toFixed(3) + "</td><td>" + demand[j].toFixed(1) + "</td>";
     tb.appendChild(tr);
@@ -220,8 +245,7 @@ export function renderReport(root) {
 
   // ---- Timestamp -------------------------------------------------------------
   root.querySelector("#ts").textContent = "As of " +
-    now.getHours().toString().padStart(2, "0") + ":" + now.getMinutes().toString().padStart(2, "0") + ":" +
-    now.getSeconds().toString().padStart(2, "0");
+    pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
 
   // ---- Cleanup ---------------------------------------------------------------
   return function cleanup() {
