@@ -71,6 +71,11 @@ header.rpt { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 .rpt .meta { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; font-size: 12px; color: var(--muted); }
 .live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--good); }
 .live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 0 rgba(12,163,12,0.5); animation: pulse 2s infinite; }
+.live.off { color: var(--muted); }
+.live.off .dot { background: var(--muted); animation: none; box-shadow: none; }
+
+.banner { margin-top: 14px; padding: 10px 14px; border-radius: 10px; font-size: 12px; line-height: 1.5; color: var(--text-secondary); background: color-mix(in srgb, var(--warning) 12%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent); }
+.banner.err { background: color-mix(in srgb, var(--critical) 10%, var(--surface-1)); border-color: color-mix(in srgb, var(--critical) 40%, transparent); }
 @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(12,163,12,0.45);} 70%{box-shadow:0 0 0 7px rgba(12,163,12,0);} 100%{box-shadow:0 0 0 0 rgba(12,163,12,0);} }
 
 /* Date/time range picker */
@@ -80,10 +85,14 @@ header.rpt { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 .chip { appearance: none; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600; color: var(--text-secondary); background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; transition: background .12s, color .12s, border-color .12s; }
 .chip:hover { background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
 .chip.active { color: var(--surface-1); background: var(--series-1); border-color: var(--series-1); }
-.custom { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-left: auto; }
+.custom { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 .custom label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
-.custom input { font: inherit; font-size: 12px; color: var(--text-primary); background: var(--page); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; color-scheme: light dark; }
-.custom input:focus { outline: 2px solid color-mix(in srgb, var(--series-1) 45%, transparent); outline-offset: 1px; }
+.custom input, .refresh select { font: inherit; font-size: 12px; color: var(--text-primary); background: var(--page); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; color-scheme: light dark; }
+.custom input:focus, .refresh select:focus { outline: 2px solid color-mix(in srgb, var(--series-1) 45%, transparent); outline-offset: 1px; }
+
+.refresh { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+.refresh label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.refresh .chip { padding: 4px 9px; line-height: 1; font-size: 14px; }
 
 .grid4 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 24px; }
 @media (max-width: 640px) { .grid4 { grid-template-columns: 1fr; } }
@@ -105,6 +114,8 @@ header.rpt { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 
 .spark { margin-top: 14px; }
 .spark .lbl { font-size: 11px; color: var(--muted); margin-bottom: 4px; display:flex; justify-content:space-between; }
+.card .last { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--grid); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.card .last b { color: var(--text-secondary); font-weight: 650; }
 
 section.trend { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 20px; margin-top: 16px; }
 section.trend h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }

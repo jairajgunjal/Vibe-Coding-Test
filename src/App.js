@@ -1,55 +1,153 @@
 import { useEffect, useRef, useState } from 'react'
 import { renderReport } from './report.js'
+import { PARAM_DEFS, DEVICE_ID } from './params.js'
+import { ensureAuth, fetchSensor, resample } from './api.js'
 
-// Date/time range presets. Each defines how many samples to draw, their spacing,
-// and the labels shown in the trend subtitle and the per-card sparkline.
+// Date/time range presets: how many samples, their spacing, and labels.
 const PRESETS = [
-  { id: '15m', label: 'Last 15 min', samples: 15, stepMs: 60000,      sub: 'Last 15 minutes · 1-minute samples',  spanLabel: 'Last 15 min' },
-  { id: '30m', label: 'Last 30 min', samples: 30, stepMs: 60000,      sub: 'Last 30 minutes · 1-minute samples',  spanLabel: 'Last 30 min' },
-  { id: '1h',  label: 'Last 1 hour', samples: 30, stepMs: 120000,     sub: 'Last 1 hour · 2-minute samples',      spanLabel: 'Last 1 hour' },
-  { id: '6h',  label: 'Last 6 hours',samples: 36, stepMs: 600000,     sub: 'Last 6 hours · 10-minute samples',    spanLabel: 'Last 6 hours' },
+  { id: '15m', label: 'Last 15 min',  samples: 15, stepMs: 60000,     sub: 'Last 15 minutes · 1-minute samples',  spanLabel: 'Last 15 min' },
+  { id: '30m', label: 'Last 30 min',  samples: 30, stepMs: 60000,     sub: 'Last 30 minutes · 1-minute samples',  spanLabel: 'Last 30 min' },
+  { id: '1h',  label: 'Last 1 hour',  samples: 30, stepMs: 120000,    sub: 'Last 1 hour · 2-minute samples',      spanLabel: 'Last 1 hour' },
+  { id: '6h',  label: 'Last 6 hours', samples: 36, stepMs: 600000,    sub: 'Last 6 hours · 10-minute samples',    spanLabel: 'Last 6 hours' },
   { id: '24h', label: 'Last 24 hours',samples: 48, stepMs: 1800000,   sub: 'Last 24 hours · 30-minute samples',   spanLabel: 'Last 24 hours' },
-  { id: '7d',  label: 'Last 7 days', samples: 42, stepMs: 14400000,   sub: 'Last 7 days · 4-hour samples',        spanLabel: 'Last 7 days' },
+  { id: '7d',  label: 'Last 7 days',  samples: 42, stepMs: 14400000,  sub: 'Last 7 days · 4-hour samples',        spanLabel: 'Last 7 days' },
 ]
 
 const CUSTOM_SAMPLES = 60
 
-// Format a Date for the <input type="datetime-local"> value (local time).
 function toLocalInput(d) {
   const p = (n) => n.toString().padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
+// Demo fallback: plausible wandering series, one per parameter key.
+function demoData(N) {
+  const gen = (base, amp, noise, seed, clamp1) => {
+    const out = []; let s = seed
+    for (let i = 0; i < N; i++) {
+      s = (s * 9301 + 49297) % 233280
+      const r = s / 233280
+      let v = base + Math.sin(i / 4 + seed) * amp + (r - 0.5) * noise
+      if (clamp1) v = Math.max(-1, Math.min(1, v))
+      out.push(v)
+    }
+    return out
+  }
+  return {
+    voltage: gen(231, 2.4, 3.0, 3),
+    current: gen(42, 3.5, 4.0, 11),
+    pf: gen(-0.90, 0.015, 0.02, 7, true), // signed PF (− = leading), ~ real reading (-0.9)
+    active: gen(150, 14, 12, 5),
+  }
+}
+
 export default function App() {
   const rootRef = useRef(null)
   const [activeId, setActiveId] = useState('30m')
+  const [token, setToken] = useState(null) // null = auth still resolving
+  const [status, setStatus] = useState({ source: 'loading', note: 'Resolving authentication…' })
+  const [refreshMs, setRefreshMs] = useState(30000) // 0 = off
+  const [tick, setTick] = useState(0)
 
-  // Custom range defaults to the last 24 hours.
   const nowInit = new Date()
   const [customFrom, setCustomFrom] = useState(() => toLocalInput(new Date(nowInit.getTime() - 24 * 3600000)))
   const [customTo, setCustomTo] = useState(() => toLocalInput(nowInit))
 
+  // Resolve auth once on startup.
   useEffect(() => {
-    let range
+    let alive = true
+    ensureAuth().then((t) => { if (alive) setToken(t || '') })
+    return () => { alive = false }
+  }, [])
+
+  // Auto-refresh: bump `tick` on the chosen interval; the data effect re-fetches.
+  useEffect(() => {
+    if (!refreshMs) return undefined
+    const id = setInterval(() => setTick((t) => t + 1), refreshMs)
+    return () => clearInterval(id)
+  }, [refreshMs])
+
+  useEffect(() => {
+    if (token === null) return // wait for auth to resolve
+
+    let cancelled = false
+    let disposeRender = null
+
+    // Build the time axis for the selected range.
+    let samples, stepMs, endMs, sub, spanLabel
     if (activeId === 'custom') {
       const fromMs = new Date(customFrom).getTime()
       const toMs = new Date(customTo).getTime()
-      // Fall back to last-24h if the inputs are missing or inverted.
       if (!isFinite(fromMs) || !isFinite(toMs) || toMs <= fromMs) {
-        const end = Date.now()
-        range = { samples: CUSTOM_SAMPLES, stepMs: (24 * 3600000) / (CUSTOM_SAMPLES - 1), endMs: end, sub: 'Custom range', spanLabel: 'Custom range' }
+        samples = CUSTOM_SAMPLES; endMs = Date.now(); stepMs = (24 * 3600000) / (CUSTOM_SAMPLES - 1)
+        sub = 'Custom range'; spanLabel = 'Custom range'
       } else {
-        const stepMs = (toMs - fromMs) / (CUSTOM_SAMPLES - 1)
-        const label = `${customFrom.replace('T', ' ')} → ${customTo.replace('T', ' ')}`
-        range = { samples: CUSTOM_SAMPLES, stepMs, endMs: toMs, sub: label, spanLabel: 'Custom range' }
+        samples = CUSTOM_SAMPLES; endMs = toMs; stepMs = (toMs - fromMs) / (CUSTOM_SAMPLES - 1)
+        sub = `${customFrom.replace('T', ' ')} → ${customTo.replace('T', ' ')}`; spanLabel = 'Custom range'
       }
     } else {
       const p = PRESETS.find((x) => x.id === activeId) || PRESETS[1]
-      range = { samples: p.samples, stepMs: p.stepMs, endMs: Date.now(), sub: p.sub, spanLabel: p.spanLabel }
+      samples = p.samples; stepMs = p.stepMs; endMs = Date.now(); sub = p.sub; spanLabel = p.spanLabel
     }
-    const cleanup = renderReport(rootRef.current, range)
-    return cleanup
-  }, [activeId, customFrom, customTo])
+
+    const timesMs = []
+    for (let i = 0; i < samples; i++) timesMs.push(Math.round(endMs - (samples - 1 - i) * stepMs))
+    const times = timesMs.map((ms) => new Date(ms))
+
+    // Demo last-point map: last value at the window end.
+    const demoLast = (dbk) => {
+      const m = {}
+      PARAM_DEFS.forEach((d) => {
+        const arr = dbk[d.key] || []
+        m[d.key] = arr.length ? { t: timesMs[timesMs.length - 1], v: arr[arr.length - 1] } : null
+      })
+      return m
+    }
+
+    ;(async () => {
+      let dataByKey, lastByKey, source, note
+      if (!token) {
+        dataByKey = demoData(samples)
+        lastByKey = demoLast(dataByKey)
+        source = 'demo'
+        note = 'No auth token — showing demo data. Open this report from the IOsense portal (adds ?token=…) or set localStorage["bearer_token"] to see live SSPEM_D2 readings.'
+      } else {
+        try {
+          const sTime = timesMs[0]
+          const eTime = timesMs[timesMs.length - 1]
+          const results = await Promise.all(
+            PARAM_DEFS.map((d) => fetchSensor(DEVICE_ID, d.sensor, sTime, eTime, token))
+          )
+          if (cancelled) return
+          dataByKey = {}
+          lastByKey = {}
+          PARAM_DEFS.forEach((d, i) => {
+            dataByKey[d.key] = resample(results[i], timesMs)
+            const pts = results[i]
+            lastByKey[d.key] = pts && pts.length ? { t: pts[pts.length - 1].t, v: pts[pts.length - 1].v } : null
+          })
+          const anyData = PARAM_DEFS.some((d) => (dataByKey[d.key] || []).some((v) => v != null && isFinite(v)))
+          if (!anyData) {
+            dataByKey = demoData(samples); lastByKey = demoLast(dataByKey); source = 'demo'
+            note = `No readings returned for ${DEVICE_ID} in this range — showing demo data.`
+          } else {
+            source = 'live'; note = ''
+          }
+        } catch (e) {
+          if (cancelled) return
+          dataByKey = demoData(samples); lastByKey = demoLast(dataByKey); source = 'error'
+          note = `Live fetch failed (${e.message}) — showing demo data.`
+        }
+      }
+      if (cancelled) return
+      setStatus({ source, note })
+      disposeRender = renderReport(rootRef.current, { defs: PARAM_DEFS, times, dataByKey, lastByKey, sub, spanLabel })
+    })()
+
+    return () => { cancelled = true; if (disposeRender) disposeRender() }
+  }, [activeId, customFrom, customTo, token, tick])
+
+  const live = status.source === 'live'
 
   return (
     <div className="app" ref={rootRef}>
@@ -57,12 +155,12 @@ export default function App() {
         <header className="rpt">
           <div>
             <h1>Energy Consumption Report</h1>
-            <div className="sub">Real-time snapshot &middot; Voltage &middot; Current &middot; Power Factor &middot; Max Demand</div>
+            <div className="sub">Real-time snapshot &middot; Voltage &middot; Current &middot; Power Factor &middot; Active Power</div>
           </div>
           <div className="meta">
-            <span className="live"><span className="dot"></span>LIVE</span>
-            <span>Device: <b id="dev">DVC-0000 (demo)</b></span>
-            <span>Sensor: <b id="sen">SN-0000 (demo)</b></span>
+            <span className={'live' + (live ? '' : ' off')}><span className="dot"></span>{live ? 'LIVE' : status.source.toUpperCase()}</span>
+            <span>Device: <b>{DEVICE_ID}</b></span>
+            <span>Sensors: <b>V·D4 &middot; I·D8 &middot; PF·D12 &middot; P·D16</b></span>
             <span id="ts">—</span>
           </div>
         </header>
@@ -72,20 +170,15 @@ export default function App() {
           <span className="tb-label">Range</span>
           <div className="chips">
             {PRESETS.map((p) => (
-              <button
-                key={p.id}
-                type="button"
+              <button key={p.id} type="button"
                 className={'chip' + (activeId === p.id ? ' active' : '')}
-                onClick={() => setActiveId(p.id)}
-              >
+                onClick={() => setActiveId(p.id)}>
                 {p.label}
               </button>
             ))}
-            <button
-              type="button"
+            <button type="button"
               className={'chip' + (activeId === 'custom' ? ' active' : '')}
-              onClick={() => setActiveId('custom')}
-            >
+              onClick={() => setActiveId('custom')}>
               Custom
             </button>
           </div>
@@ -99,7 +192,23 @@ export default function App() {
               </label>
             </div>
           )}
+          <div className="refresh">
+            <label>Auto-refresh
+              <select value={refreshMs} onChange={(e) => setRefreshMs(Number(e.target.value))}>
+                <option value={0}>Off</option>
+                <option value={10000}>10s</option>
+                <option value={30000}>30s</option>
+                <option value={60000}>1m</option>
+                <option value={300000}>5m</option>
+              </select>
+            </label>
+            <button type="button" className="chip" onClick={() => setTick((t) => t + 1)} title="Refresh now">↻</button>
+          </div>
         </div>
+
+        {status.note && (
+          <div className={'banner' + (status.source === 'error' ? ' err' : '')}>{status.note}</div>
+        )}
 
         <div className="grid4" id="cards"></div>
 
@@ -112,12 +221,19 @@ export default function App() {
 
         <div className="tbl-wrap">
           <table id="tbl">
-            <thead><tr><th>Time</th><th>Voltage (V)</th><th>Current (A)</th><th>Power Factor</th><th>Max Demand (kW)</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Time</th>
+                {PARAM_DEFS.map((d) => (
+                  <th key={d.key}>{d.name}{d.unit ? ` (${d.unit})` : ''}</th>
+                ))}
+              </tr>
+            </thead>
             <tbody></tbody>
           </table>
         </div>
 
-        <footer className="rpt">Demo report with simulated data. Replace device/sensor IDs and wire to live readings to go production.</footer>
+        <footer className="rpt">Energy meter {DEVICE_ID} · Voltage D4 · Current D8 · Power Factor D12 · Active Power D16.</footer>
       </div>
 
       <div className="tooltip" id="tt"></div>

@@ -41,12 +41,38 @@ it works whether served from a domain root or a sub-path.
 public/index.html   HTML template (mounts #root)
 src/
   index.js          React entry
-  App.js            static shell that mirrors the original markup + range picker
-  report.js         data + gauge/sparkline/trend/table rendering (ported verbatim)
-  index.css         styles (ported verbatim, theme-aware light/dark)
+  App.js            shell + range picker; resolves auth, fetches data, renders
+  params.js         device + sensor map and per-parameter render metadata
+  api.js            IOsense auth (SSO/bearer) + getDataCalibration fetch + resample
+  report.js         gauge/sparkline/trend/table renderer (data injected)
+  index.css         styles (theme-aware light/dark)
 ```
 
-## Wiring real data
+## Live data (IOsense energy meter)
 
-The values are simulated in `src/report.js`. To go live, replace the `series(...)`
-generators and the demo device/sensor IDs in `src/App.js` with real readings.
+Bound to device **SSPEM_D2**:
+
+| Parameter    | Sensor |
+| ------------ | ------ |
+| Voltage      | D4     |
+| Current      | D8     |
+| Power Factor | D12    |
+| Active Power | D16    |
+
+Data is read from
+`GET /api/account/deviceData/getDataCalibration/{devID}/{sensor}/{sTime}/{eTime}/true`
+on `https://connector.iosense.io`, resampled onto the selected time window.
+
+**Auth** (Bearer JWT), resolved in `src/api.js`:
+
+1. `?token=<sso>` in the URL → exchanged once via `retrieve-sso-token`, stored as
+   `localStorage['bearer_token']`, URL cleaned. (This is what the IOsense portal does.)
+2. else an existing `localStorage['bearer_token']`.
+3. dev convenience: `?authentication=<jwt>`.
+
+Without a token (or if the fetch fails / returns nothing) the report falls back to
+**demo data** and shows a banner — so it always renders.
+
+To edit the device/sensors or thresholds, see `src/params.js`. Active Power's gauge
+auto-scales to the data; its unit label (kW) and any limit are placeholders — adjust
+in `params.js` to match the meter.

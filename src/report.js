@@ -1,81 +1,57 @@
-// Energy consumption report rendering logic.
+// Energy consumption report renderer.
 //
-// Ported from the original standalone HTML report and parameterized to run
-// against a provided root element (the React-mounted `.app` node) and a `range`
-// descriptor from the date/time picker:
+// Render-only: the data is supplied by the caller (real readings from the energy
+// meter, or the demo fallback). Draws the parameter cards (gauge + readout +
+// sparkline), the recent-history trend chart with hover tooltip, and the table.
 //
-//   range = { samples, stepMs, endMs, sub }
-//
-// Behavior, data model, gauges, sparklines, the trend chart, hover tooltip, and
-// table are preserved; only the time window (sample count, spacing, end time and
-// the axis/table time formatting) now follows the selected range.
+//   model = {
+//     defs:      PARAM_DEFS (name, unit, series, min, max, decimals, status, ...),
+//     times:     Date[]                 // shared x-axis, ascending
+//     dataByKey: { [key]: number[] }    // aligned to times, one array per def
+//     sub:       string,                // trend subtitle
+//     spanLabel: string,                // per-card sparkline window label
+//   }
 //
 // Returns a cleanup function that detaches the hover listeners.
 
-export function renderReport(root, range) {
+export function renderReport(root, model) {
+  const defs = model.defs
+  const times = model.times
+  const dataByKey = model.dataByKey || {}
+
   function cssv(name) { return getComputedStyle(root).getPropertyValue(name).trim(); }
   function pad(n) { return n.toString().padStart(2, "0"); }
 
-  // ---- Time window (driven by the picker) -----------------------------------
-  var N = range.samples;
-  var stepMs = range.stepMs;
-  var endMs = range.endMs;
-  var spanMs = stepMs * (N - 1);
-  var now = new Date();
+  var N = times.length;
+  var spanMs = N > 1 ? (times[N - 1].getTime() - times[0].getTime()) : 0;
 
-  var times = [];
-  for (var i = 0; i < N; i++) times.push(new Date(endMs - (N - 1 - i) * stepMs));
-
-  // Show date components only when the window is longer than a day.
   function fmtT(t) {
     var hm = pad(t.getHours()) + ":" + pad(t.getMinutes());
     if (spanMs > 3 * 86400000) return pad(t.getDate()) + "/" + pad(t.getMonth() + 1);
     if (spanMs > 86400000) return pad(t.getDate()) + "/" + pad(t.getMonth() + 1) + " " + hm;
     return hm;
   }
-
-  // deterministic-ish wandering series so the report is stable per render
-  function series(base, amp, noise, seed) {
-    var out = [], v = base, s = seed;
-    for (var k = 0; k < N; k++) {
-      s = (s * 9301 + 49297) % 233280;
-      var r = s / 233280;
-      var wobble = Math.sin(k / 4 + seed) * amp;
-      v = base + wobble + (r - 0.5) * noise;
-      out.push(v);
-    }
-    return out;
+  function fmtV(p, v) {
+    if (v == null || !isFinite(v)) return "—";
+    return Number(v).toFixed(p.decimals);
   }
+  function fmtStamp(t) {
+    return pad(t.getDate()) + "/" + pad(t.getMonth() + 1) + " " +
+           pad(t.getHours()) + ":" + pad(t.getMinutes()) + ":" + pad(t.getSeconds());
+  }
+  var lastByKey = model.lastByKey || {};
 
-  var voltage = series(231, 2.4, 3.0, 3).map(function (x) { return +x.toFixed(1); });
-  var current = series(42, 3.5, 4.0, 11).map(function (x) { return +x.toFixed(1); });
-  var pf      = series(0.93, 0.02, 0.03, 7).map(function (x) { return +Math.min(1, x).toFixed(3); });
-  var demand  = series(150, 14, 12, 5).map(function (x) { return +x.toFixed(1); });
-
-  var last = N - 1;
-
-  var params = [
-    { key: "voltage", name: "Voltage", unit: "V",  data: voltage, val: voltage[last],
-      min: 200, max: 250, nominal: 230, series: "--series-1",
-      fmt: function (v) { return v.toFixed(1); },
-      status: function (v) { return (v >= 207 && v <= 244) ? "good" : (v >= 200 && v <= 250 ? "warn" : "crit"); },
-      range: "Nominal 230 V &middot; 200–250 V" },
-    { key: "current", name: "Current", unit: "A",  data: current, val: current[last],
-      min: 0, max: 100, nominal: null, series: "--series-2",
-      fmt: function (v) { return v.toFixed(1); },
-      status: function (v) { return v <= 80 ? "good" : (v <= 95 ? "warn" : "crit"); },
-      range: "Rated 100 A" },
-    { key: "pf", name: "Power Factor", unit: "", data: pf, val: pf[last],
-      min: 0, max: 1, nominal: 1, series: "--series-3",
-      fmt: function (v) { return v.toFixed(3); },
-      status: function (v) { return v >= 0.90 ? "good" : (v >= 0.80 ? "warn" : "crit"); },
-      range: "Target ≥ 0.90 (lag)" },
-    { key: "demand", name: "Max Demand", unit: "kW", data: demand, val: Math.max.apply(null, demand),
-      min: 0, max: 200, nominal: 200, series: "--series-4",
-      fmt: function (v) { return v.toFixed(1); },
-      status: function (v) { return v <= 160 ? "good" : (v <= 190 ? "warn" : "crit"); },
-      range: "Contract limit 200 kW" }
-  ];
+  // Assemble params: defs + injected data + current value.
+  var params = defs.map(function (d) {
+    var raw = dataByKey[d.key] || [];
+    var data = raw.map(function (x) { return (x == null || !isFinite(x)) ? 0 : Number(x); });
+    var val = data.length ? data[data.length - 1] : 0;
+    var out = {};
+    for (var k in d) out[k] = d[k];
+    out.data = data;
+    out.val = val;
+    return out;
+  });
 
   var STC = { good: "--good", warn: "--warning", crit: "--critical" };
   var STLABEL = { good: "Normal", warn: "High", crit: "Critical" };
@@ -97,11 +73,20 @@ export function renderReport(root, range) {
     return "M" + p0[0].toFixed(2) + " " + p0[1].toFixed(2) +
            " A" + r + " " + r + " 0 " + large + " 1 " + p1[0].toFixed(2) + " " + p1[1].toFixed(2);
   }
+  function gaugeMax(p) {
+    if (!p.dynamicMax) return p.max;
+    var mx = p.data.length ? Math.max.apply(null, p.data) : p.max;
+    mx = mx * 1.1;
+    return (isFinite(mx) && mx > p.min) ? mx : p.max;
+  }
   function gauge(p) {
     var W = 132, H = 84, cx = W / 2, cy = 76, r = 56, sw = 11;
-    var frac = Math.max(0, Math.min(1, (p.val - p.min) / (p.max - p.min)));
+    var effMax = gaugeMax(p);
+    var gval = p.abs ? Math.abs(p.val) : p.val;
+    var frac = Math.max(0, Math.min(1, (gval - p.min) / (effMax - p.min)));
     var end = frac * 180;
-    var col = cssv(p.status(p.val) === "good" ? STC.good : STC[p.status(p.val)]);
+    var st = p.status(p.val);
+    var col = cssv(st === "good" ? STC.good : STC[st]);
     var svg = '<svg class="gauge" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">';
     svg += '<path d="' + arc(cx, cy, r, 0, 180) + '" fill="none" stroke="' + cssv("--track") + '" stroke-width="' + sw + '" stroke-linecap="round"/>';
     if (end > 0.5) svg += '<path d="' + arc(cx, cy, r, 0, end) + '" fill="none" stroke="' + col + '" stroke-width="' + sw + '" stroke-linecap="round"/>';
@@ -136,7 +121,7 @@ export function renderReport(root, range) {
 
   // ---- Range subtitle --------------------------------------------------------
   var subEl = root.querySelector("#rangesub");
-  if (subEl) subEl.textContent = range.sub + " · each series indexed to its own scale";
+  if (subEl) subEl.textContent = model.sub + " · each series indexed to its own scale";
 
   // ---- Render cards ----------------------------------------------------------
   var cardsEl = root.querySelector("#cards");
@@ -150,12 +135,15 @@ export function renderReport(root, range) {
       '<div class="top"><span class="name">' + p.name + '</span>' +
       '<span class="status ' + stClass + '">' + ICON[st] + STLABEL[st] + '</span></div>' +
       '<div class="body">' + gauge(p) +
-        '<div class="readout"><div><span class="val">' + p.fmt(p.val) + '</span>' +
+        '<div class="readout"><div><span class="val">' + fmtV(p, p.val) + '</span>' +
         (p.unit ? '<span class="unit">' + p.unit + '</span>' : '') + '</div>' +
         '<div class="rng">' + p.range + '</div></div></div>' +
-      '<div class="spark"><div class="lbl"><span>' + range.spanLabel + '</span><span>min ' +
-        p.fmt(Math.min.apply(null, p.data)) + ' &middot; max ' + p.fmt(Math.max.apply(null, p.data)) + '</span></div>' +
-        sparkline(p.data, p.series) + '</div>';
+      '<div class="spark"><div class="lbl"><span>' + model.spanLabel + '</span><span>min ' +
+        fmtV(p, Math.min.apply(null, p.data)) + ' &middot; max ' + fmtV(p, Math.max.apply(null, p.data)) + '</span></div>' +
+        sparkline(p.data, p.series) + '</div>' +
+      '<div class="last">' + (lastByKey[p.key]
+        ? 'Last data point: <b>' + fmtV(p, lastByKey[p.key].v) + (p.unit ? ' ' + p.unit : '') + '</b> &middot; ' + fmtStamp(new Date(lastByKey[p.key].t))
+        : 'No data point in range') + '</div>';
     cardsEl.appendChild(el);
   });
 
@@ -178,17 +166,14 @@ export function renderReport(root, range) {
   function tx(i) { return ML + (i / (N - 1)) * plotW; }
   function ty(f) { return MT + (1 - f) * plotH; }
 
-  // Four evenly-spaced x ticks, regardless of sample count.
   var ticks = [0, Math.round((N - 1) / 3), Math.round(2 * (N - 1) / 3), N - 1]
     .filter(function (v, i, a) { return a.indexOf(v) === i; });
 
   var chart = '<svg id="tsvg" width="100%" viewBox="0 0 ' + TW + ' ' + TH + '" style="display:block">';
-  // gridlines
   for (var g = 0; g <= 4; g++) {
     var gy = MT + (g / 4) * plotH;
     chart += '<line x1="' + ML + '" y1="' + gy + '" x2="' + (TW - MR) + '" y2="' + gy + '" stroke="' + cssv("--grid") + '" stroke-width="1"/>';
   }
-  // x labels
   ticks.forEach(function (i) {
     var t = times[i];
     var anchor = i === 0 ? "start" : (i === N - 1 ? "end" : "middle");
@@ -218,7 +203,7 @@ export function renderReport(root, range) {
     var t = times[idx];
     var rows = params.map(function (p) {
       return '<div class="tt-r"><span class="k" style="background:' + cssv(p.series) + '"></span>' +
-        p.name + ': <b>' + p.fmt(p.data[idx]) + (p.unit ? ' ' + p.unit : '') + '</b></div>';
+        p.name + ': <b>' + fmtV(p, p.data[idx]) + (p.unit ? ' ' + p.unit : '') + '</b></div>';
     }).join("");
     tt.innerHTML = '<div class="tt-t">' + fmtT(t) + '</div>' + rows;
     tt.style.opacity = "1";
@@ -235,13 +220,14 @@ export function renderReport(root, range) {
   tb.innerHTML = "";
   for (var j = N - 1; j >= 0; j--) {
     var tr = document.createElement("tr");
-    tr.innerHTML = "<td>" + fmtT(times[j]) + "</td>" +
-      "<td>" + voltage[j].toFixed(1) + "</td><td>" + current[j].toFixed(1) + "</td>" +
-      "<td>" + pf[j].toFixed(3) + "</td><td>" + demand[j].toFixed(1) + "</td>";
+    var cells = "<td>" + fmtT(times[j]) + "</td>";
+    for (var c = 0; c < params.length; c++) cells += "<td>" + fmtV(params[c], params[c].data[j]) + "</td>";
+    tr.innerHTML = cells;
     tb.appendChild(tr);
   }
 
   // ---- Timestamp -------------------------------------------------------------
+  var now = new Date();
   root.querySelector("#ts").textContent = "As of " +
     pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
 
