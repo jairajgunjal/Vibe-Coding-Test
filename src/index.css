@@ -15,7 +15,8 @@ html, body { margin: 0; padding: 0; }
   --series-1: #2a78d6;  /* voltage - blue */
   --series-2: #eb6834;  /* current - orange */
   --series-3: #1baf7a;  /* pf - aqua */
-  --series-4: #eda100;  /* max demand - yellow */
+  --series-4: #eda100;  /* active power - yellow */
+  --series-5: #e87ba4;  /* apparent power - magenta */
   --track: #e8e7e1;
   --good: #0ca30c;
   --warning: #fab219;
@@ -43,6 +44,7 @@ html, body { margin: 0; padding: 0; }
     --series-2: #d95926;
     --series-3: #199e70;
     --series-4: #c98500;
+    --series-5: #d55181;
     --track: #2c2c2a;
   }
 }
@@ -60,6 +62,7 @@ html, body { margin: 0; padding: 0; }
   --series-2: #d95926;
   --series-3: #199e70;
   --series-4: #c98500;
+  --series-5: #d55181;
   --track: #2c2c2a;
 }
 

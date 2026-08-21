@@ -36,4 +36,10 @@ export const PARAM_DEFS = [
     min: 0, max: 250, decimals: 1, dynamicMax: true, range: 'Live from D16',
     status: () => 'good',
   },
+  {
+    // Apparent Power — auto-scaled gauge, informational status (like Active Power).
+    key: 'apparent', name: 'Apparent Power', sensor: 'D20', unit: 'kVA', series: '--series-5',
+    min: 0, max: 250, decimals: 1, dynamicMax: true, range: 'Live from D20',
+    status: () => 'good',
+  },
 ]

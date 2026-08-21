@@ -53,6 +53,17 @@ export async function ensureAuth() {
   return getToken()
 }
 
+// Fetch device metadata (sensor list + names + selected units). Returns the
+// `data` object, or null.
+export async function fetchDeviceMeta(devID, token) {
+  const r = await fetch(`${API_BASE}/api/account/ai-sdk/metaData/device/${devID}`, {
+    headers: { Authorization: token, Accept: 'application/json' },
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  const j = await r.json()
+  return j && j.data ? j.data : null
+}
+
 // Fetch one sensor's time-series in [sTime, eTime] (unix ms). Returns an ascending
 // array of { t: ms, v: number }.
 export async function fetchSensor(devID, sensor, sTime, eTime, token) {

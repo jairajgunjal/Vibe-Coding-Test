@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { renderReport } from './report.js'
 import { PARAM_DEFS, DEVICE_ID } from './params.js'
-import { ensureAuth, fetchSensor, resample } from './api.js'
+import { ensureAuth, fetchSensor, resample, fetchDeviceMeta } from './api.js'
+
+const DEBUG = (() => {
+  try { return new URLSearchParams(window.location.search).get('debug') === '1' } catch (e) { return false }
+})()
 
 // Date/time range presets: how many samples, their spacing, and labels.
 const PRESETS = [
@@ -38,6 +42,7 @@ function demoData(N) {
     current: gen(42, 3.5, 4.0, 11),
     pf: gen(-0.90, 0.015, 0.02, 7, true), // signed PF (− = leading), ~ real reading (-0.9)
     active: gen(150, 14, 12, 5),
+    apparent: gen(166, 15, 12, 9), // ≈ active / |pf|
   }
 }
 
@@ -48,6 +53,7 @@ export default function App() {
   const [status, setStatus] = useState({ source: 'loading', note: 'Resolving authentication…' })
   const [refreshMs, setRefreshMs] = useState(30000) // 0 = off
   const [tick, setTick] = useState(0)
+  const [meta, setMeta] = useState(null) // debug: device sensor list
 
   const nowInit = new Date()
   const [customFrom, setCustomFrom] = useState(() => toLocalInput(new Date(nowInit.getTime() - 24 * 3600000)))
@@ -59,6 +65,16 @@ export default function App() {
     ensureAuth().then((t) => { if (alive) setToken(t || '') })
     return () => { alive = false }
   }, [])
+
+  // Debug: load the device's sensor list so tag→name mapping can be verified.
+  useEffect(() => {
+    if (!DEBUG || !token) return
+    let alive = true
+    fetchDeviceMeta(DEVICE_ID, token)
+      .then((d) => { if (alive) setMeta(d) })
+      .catch((e) => { if (alive) setMeta({ error: e.message }) })
+    return () => { alive = false }
+  }, [token])
 
   // Auto-refresh: bump `tick` on the chosen interval; the data effect re-fetches.
   useEffect(() => {
@@ -208,6 +224,30 @@ export default function App() {
 
         {status.note && (
           <div className={'banner' + (status.source === 'error' ? ' err' : '')}>{status.note}</div>
+        )}
+
+        {DEBUG && (
+          <div className="banner">
+            <b>Debug · {DEVICE_ID} sensors</b>
+            {!meta && <div>Loading device metadata…</div>}
+            {meta && meta.error && <div>Error: {meta.error}</div>}
+            {meta && meta.sensors && (
+              <div className="tbl-wrap" style={{ marginTop: 8 }}>
+                <table>
+                  <thead><tr><th>Sensor ID</th><th>Sensor name</th><th>Unit</th></tr></thead>
+                  <tbody>
+                    {meta.sensors.map((s) => (
+                      <tr key={s.sensorId}>
+                        <td style={{ textAlign: 'left' }}>{s.sensorId}</td>
+                        <td style={{ textAlign: 'left' }}>{s.sensorName}</td>
+                        <td style={{ textAlign: 'left' }}>{(meta.unitSelected && meta.unitSelected[s.sensorId]) || ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         )}
 
         <div className="grid4" id="cards"></div>
